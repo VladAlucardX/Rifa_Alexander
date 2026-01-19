@@ -234,11 +234,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
     final emailController = TextEditingController();
     final passwordController = TextEditingController();
     bool isLoading = false;
+    final messenger = ScaffoldMessenger.of(context);
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
           title: const Text('Registrar Nuevo Vendedor'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -257,13 +258,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
               onPressed: isLoading
                   ? null
                   : () async {
+                      final navigator = Navigator.of(dialogContext);
+                      final errorMessenger = ScaffoldMessenger.of(dialogContext);
                       setState(() {
                         isLoading = true;
                       });
@@ -272,24 +275,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           email: emailController.text.trim(),
                           password: passwordController.text,
                         );
-                        if (mounted) {
-                          Navigator.of(context).pop();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Vendedor registrado exitosamente')),
-                          );
-                        }
+                        navigator.pop();
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('Vendedor registrado exitosamente')),
+                        );
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Error: $e')),
-                          );
-                        }
+                        errorMessenger.showSnackBar(
+                          SnackBar(content: Text('Error: $e')),
+                        );
                       } finally {
-                        if (mounted) {
-                          setState(() {
-                            isLoading = false;
-                          });
-                        }
+                        setState(() {
+                          isLoading = false;
+                        });
                       }
                     },
               child: isLoading ? const CircularProgressIndicator() : const Text('Registrar'),
@@ -350,8 +347,154 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 }
 
-class VentaPage extends StatelessWidget {
+class VentaPage extends StatefulWidget {
   const VentaPage({super.key});
+
+  @override
+  State<VentaPage> createState() => _VentaPageState();
+}
+
+class _VentaPageState extends State<VentaPage> {
+  List<Map<String, dynamic>> _juegos = [];
+  bool _isLoadingJuegos = true;
+  Map<String, dynamic>? _selectedJuego;
+  final _numeroController = TextEditingController();
+  final _montoController = TextEditingController();
+  bool _isVending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadJuegos();
+  }
+
+  Future<void> _loadJuegos() async {
+    try {
+      final response = await Supabase.instance.client.from('juegos').select('id, nombre');
+      setState(() {
+        _juegos = List<Map<String, dynamic>>.from(response);
+        _isLoadingJuegos = false;
+      });
+    } catch (e) {
+      debugPrint('Error cargando juegos: $e');
+      setState(() {
+        _isLoadingJuegos = false;
+      });
+    }
+  }
+
+  Future<void> _vender() async {
+    if (_selectedJuego == null || _numeroController.text.isEmpty || _montoController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Completa todos los campos')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isVending = true;
+    });
+
+    try {
+      final ventaData = {
+        'juego_id': _selectedJuego!['id'],
+        'numero_jugado': int.parse(_numeroController.text),
+        'monto': double.parse(_montoController.text),
+        'fecha_hora': DateTime.now().toIso8601String(),
+        'vendedor_id': Supabase.instance.client.auth.currentUser!.id,
+      };
+
+      final response = await Supabase.instance.client
+          .from('ventas')
+          .insert(ventaData)
+          .select('id')
+          .single();
+
+      final ticketId = response['id'];
+
+      _numeroController.clear();
+      _montoController.clear();
+      setState(() {
+        _selectedJuego = null;
+      });
+
+      _showTicketDialog(ticketId, ventaData);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al vender: $e')),
+      );
+    } finally {
+      setState(() {
+        _isVending = false;
+      });
+    }
+  }
+
+  void _showTicketDialog(int ticketId, Map<String, dynamic> ventaData) {
+    final fecha = DateTime.parse(ventaData['fecha_hora']);
+    final fechaStr = '${fecha.day}/${fecha.month}/${fecha.year}';
+    final horaStr = '${fecha.hour}:${fecha.minute.toString().padLeft(2, '0')}';
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.white,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'LOTO NICARAGUA',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Fecha: $fechaStr',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              Text(
+                'Hora: $horaStr',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Juego: ${_selectedJuego!['nombre']}',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              Text(
+                'Número: ${ventaData['numero_jugado']}',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              Text(
+                'Monto: C\$${ventaData['monto']}',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Ticket #: $ticketId',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Listo'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -367,8 +510,46 @@ class VentaPage extends StatelessWidget {
           ),
         ],
       ),
-      body: const Center(
-        child: Text('Página de Ventas'),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: _isLoadingJuegos
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  DropdownButtonFormField<Map<String, dynamic>>(
+                    value: _selectedJuego,
+                    decoration: const InputDecoration(labelText: 'Juego'),
+                    items: _juegos.map((juego) {
+                      return DropdownMenuItem(
+                        value: juego,
+                        child: Text(juego['nombre']),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedJuego = value;
+                      });
+                    },
+                  ),
+                  TextField(
+                    controller: _numeroController,
+                    decoration: const InputDecoration(labelText: 'Número Jugado'),
+                    keyboardType: TextInputType.number,
+                  ),
+                  TextField(
+                    controller: _montoController,
+                    decoration: const InputDecoration(labelText: 'Monto C\$'),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 20),
+                  _isVending
+                      ? const CircularProgressIndicator()
+                      : ElevatedButton(
+                          onPressed: _vender,
+                          child: const Text('Vender'),
+                        ),
+                ],
+              ),
       ),
     );
   }
